@@ -14,6 +14,8 @@ The connection uses `http://127.0.0.1:8765` by default. If you changed AnkiConne
 
 If your AnkiConnect configuration requires an API key, enter it in settings. The key is kept in memory only and must be re-entered after restarting or re-enabling the droplet. It is not stored in Droppy preferences or logs.
 
+If AnkiConnect reports “Deck counts unavailable,” the connection still loads your decks and lets you start a review. The widget shows **Due count unavailable**, not zero; refresh decks when Anki can provide counts again.
+
 ## Reviewing
 
 - The solo widget displays the card. **Show answer** reveals Anki's answer template; the rating buttons and intervals follow the available Anki choices.
@@ -65,7 +67,13 @@ The harness uses injected fixtures by default, not a real Anki connection. Its s
 /Users/jij/droppykit/Scripts/droppykit run -- --scenario answer --shots .build/shots-answer --report .build/shots-answer/report.json
 ```
 
-Scenarios: `question` (default), `answer`, `ready`, `paused`, `offline`, `ended`, `uncertain`, `long`, `image`, `unsupported`. Use the production bundle in Droppy/Playground for live integration checks; harness fixtures do not verify Anki's focus behavior, scheduling or host WebKit support.
+Scenarios: `question` (default), `answer`, `ready`, `counts-unavailable`, `paused`, `offline`, `ended`, `uncertain`, `long`, `image`, `unsupported`. Use the production bundle in Droppy/Playground for live integration checks; harness fixtures do not verify Anki's focus behavior, scheduling or host WebKit support.
+
+To test the real connection on the default port without starting a review or grading cards, keep Anki running with AnkiConnect and no API key required, then run:
+
+```bash
+ANKI_CONNECT_LIVE_TESTS=1 swift test --filter liveConnectionLoadsDecksWithoutStartingAReview
+```
 
 ## Before submitting
 

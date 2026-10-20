@@ -3,16 +3,19 @@ import Foundation
 package struct AnkiDeck: Identifiable, Equatable, Sendable {
     package var id: String { name }
     package let name: String
-    package let newCount: Int
-    package let learningCount: Int
-    package let reviewCount: Int
-    package var dueCount: Int { newCount + learningCount + reviewCount }
+    package let newCount: Int?
+    package let learningCount: Int?
+    package let reviewCount: Int?
+    package var dueCount: Int? {
+        guard let newCount, let learningCount, let reviewCount else { return nil }
+        return newCount + learningCount + reviewCount
+    }
 
-    package init(name: String, newCount: Int = 0, learningCount: Int = 0, reviewCount: Int = 0) {
+    package init(name: String, newCount: Int? = nil, learningCount: Int? = nil, reviewCount: Int? = nil) {
         self.name = name
-        self.newCount = min(1_000_000_000, max(0, newCount))
-        self.learningCount = min(1_000_000_000, max(0, learningCount))
-        self.reviewCount = min(1_000_000_000, max(0, reviewCount))
+        self.newCount = newCount.map { min(1_000_000_000, max(0, $0)) }
+        self.learningCount = learningCount.map { min(1_000_000_000, max(0, $0)) }
+        self.reviewCount = reviewCount.map { min(1_000_000_000, max(0, $0)) }
     }
 }
 
@@ -180,11 +183,16 @@ package actor AnkiConnectClient: AnkiReviewing {
         let names: [String] = try await request("deckNames")
         guard names.count <= 5_000, Set(names).count == names.count else { throw AnkiError.invalidResponse }
         guard !names.isEmpty else { return [] }
-        let stats: [String: DeckStats] = try await request("getDeckStats", parameters: .decks(names))
+        let stats: [String: DeckStats]
+        do {
+            stats = try await request("getDeckStats", parameters: .decks(names))
+        } catch RequestFailure.unavailableDeckCounts {
+            stats = [:]
+        }
         return names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.map { name in
             let counts = stats.values.first { $0.name == name }
-            return AnkiDeck(name: name, newCount: counts?.new_count ?? 0,
-                            learningCount: counts?.learn_count ?? 0, reviewCount: counts?.review_count ?? 0)
+            return AnkiDeck(name: name, newCount: counts?.new_count,
+                            learningCount: counts?.learn_count, reviewCount: counts?.review_count)
         }
     }
 
@@ -298,13 +306,16 @@ package actor AnkiConnectClient: AnkiReviewing {
                 throw AnkiError.authorization
             }
             if message.contains("unsupported action") { throw AnkiError.incompatible }
+            if action == "getDeckStats", message == "deck counts unavailable." {
+                throw RequestFailure.unavailableDeckCounts
+            }
             throw AnkiError.server
         }
         guard envelope.hasResult else { throw AnkiError.invalidResponse }
         return try envelope.value()
     }
 
-    private enum RequestFailure: Error { case inactiveReviewer }
+    private enum RequestFailure: Error { case inactiveReviewer, unavailableDeckCounts }
 
     private struct Request: Encodable {
         let action: String

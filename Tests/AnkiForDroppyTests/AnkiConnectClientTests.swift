@@ -28,6 +28,65 @@ struct AnkiConnectClientTests {
         try expectRequest(requests[4], action: "getDeckStats", params: ["decks": ["Deck 10", "Deck 2"]], key: "test-only-key", port: 9876)
     }
 
+    @Test func unavailableDeckCountsDoNotBlockConnection() async throws {
+        let fixture = ClientFixture(handshakePrefix() + [
+            .json(#"{"result":["Deck 10","Deck 2"],"error":null}"#),
+            .json(#"{"result":null,"error":"Deck counts unavailable."}"#)
+        ])
+
+        let decks = try await fixture.client.decks()
+
+        #expect(decks.map(\.name) == ["Deck 2", "Deck 10"])
+        #expect(decks.allSatisfy { $0.dueCount == nil })
+        let requests = try fixture.requests(count: 5)
+        try expectRequest(requests[4], action: "getDeckStats", params: ["decks": ["Deck 10", "Deck 2"]])
+    }
+
+    @Test func missingDeckStatisticsAreNotReportedAsZero() async throws {
+        let fixture = ClientFixture(handshakePrefix() + [
+            .json(#"{"result":["Available","Missing"],"error":null}"#),
+            .json(#"{"result":{"123":{"name":"Available","new_count":0,"learn_count":0,"review_count":0}},"error":null}"#)
+        ])
+
+        let decks = try await fixture.client.decks()
+
+        #expect(decks.map(\.dueCount) == [0, nil])
+        _ = try fixture.requests(count: 5)
+    }
+
+    @Test(arguments: ["Invalid API key", "unsupported action", "other failure"])
+    func unrelatedStatsErrorsStillFailConnection(_ message: String) async throws {
+        let fixture = ClientFixture(handshakePrefix() + [
+            .json(#"{"result":["Existing"],"error":null}"#),
+            .json("{\"result\":null,\"error\":\"\(message)\"}")
+        ])
+        let expected: AnkiError = switch message {
+        case "Invalid API key": .authorization
+        case "unsupported action": .incompatible
+        default: .server
+        }
+
+        await expectError(expected) { _ = try await fixture.client.decks() }
+
+        _ = try fixture.requests(count: 5)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["ANKI_CONNECT_LIVE_TESTS"] == "1"))
+    @MainActor func liveConnectionLoadsDecksWithoutStartingAReview() async {
+        let session = ReviewSession(client: AnkiConnectClient())
+        session.activate(networkAllowed: true, selectedDeck: "", pendingGrade: nil)
+        defer { session.deactivate() }
+
+        session.connect()
+        await session.waitUntilIdle()
+
+        #expect(session.isConnected)
+        #expect(session.phase == .ready)
+        #expect(session.message == nil)
+        #expect(session.card == nil)
+        #expect(!session.isReviewing)
+    }
+
     @Test func emptyDeckListDoesNotRequestStatsOrSendAnEmptyKey() async throws {
         let fixture = ClientFixture(handshakePrefix() + [.json(#"{"result":[],"error":null}"#)])
 
