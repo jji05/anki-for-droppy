@@ -1,26 +1,72 @@
 # Anki for Droppy
 
-A Droplet for [Droppy](https://getdroppy.app), built with
-[DroppyKit](https://getdroppy.app/docs/droppykit).
+Quick Anki reviews from [Droppy](https://getdroppy.app)'s shelf. Choose a deck, reveal an answer and rate your recall. Anki selects the cards, schedules them and saves your reviews.
 
-## Developing
+## Setup
+
+1. Install [Anki desktop](https://apps.ankiweb.net/).
+2. In Anki, open **Tools → Add-ons → Get Add-ons**, enter **2055492159** ([AnkiConnect](https://ankiweb.net/shared/info/2055492159)), then restart Anki.
+3. Add the built `AnkiForDroppy.droplet` under Droppy's **Settings → Store → Local droplets** and approve the build, or use Droppy Playground for development.
+4. Open this droplet's settings and press **Connect**. Anki must stay running.
+5. Choose a deck, open the widget alone, and press **Start review**.
+
+The connection uses `http://127.0.0.1:8765` by default. If you changed AnkiConnect's port, enter the same port in settings. Remote servers and redirects are not supported. No AnkiWeb credentials or direct collection-file access are used.
+
+If your AnkiConnect configuration requires an API key, enter it in settings. The key is kept in memory only and must be re-entered after restarting or re-enabling the droplet. It is not stored in Droppy preferences or logs.
+
+## Reviewing
+
+- The solo widget displays the card. **Show answer** reveals Anki's answer template; the rating buttons and intervals follow the available Anki choices.
+- The paired widget is a compact summary. **Open review** reveals the solo widget.
+- The shelf stays open while reviewing. **Pause** releases it; **Resume** rechecks the active card. **Stop** ends the local session without undoing reviews or closing Anki.
+- Optional notch progress appears only during an active session. Other Droppy activities can take its place.
+- The reviewed count includes confirmed reviews from this session, not an estimated completion percentage. Learning cards can repeat or become due later.
+
+### Use one reviewer at a time
+
+The droplet shares Anki's active reviewer. **Do not grade concurrently in Anki and Droppy**, or run a second review client. The droplet checks the card before actions, but AnkiConnect's legacy interface cannot atomically bind a rating to an expected card ID or guarantee exactly-once delivery.
+
+Starting/revealing changes Anki's reviewer and may focus Anki content, trigger add-on dialogs or play Anki-side audio. Fully background, focus-free behavior is not guaranteed across Anki/add-on versions. Custom add-ons that relabel or intercept rating buttons are not supported.
+
+### Uncertain ratings
+
+AnkiConnect can accept a rating before it is saved. The droplet checks Anki's persisted review history before counting it, and **never automatically sends a rating again** after an ambiguous result.
+
+If **Check your last rating** appears:
+
+1. Press **Check status** to look for the saved review without resending it.
+2. If needed, open Anki and verify the card's review history.
+3. Only after checking, choose **I've checked Anki…** to acknowledge the uncertainty and start another session.
+
+A small local recovery record (card ID, requested ease, prior review IDs and connection port) survives stopping/re-enabling/restarting. It contains no card text or API key. Pause, stop and cancellation cannot retract a rating already received by Anki. Changing Anki profiles while a rating is pending requires checking it manually in the original profile.
+
+## Card compatibility
+
+The widget renders Anki's template HTML and CSS, including cloze selection and front-side expansion. Supported collection images, styles, fonts and portable audio references load through AnkiConnect. Scripts, remote resources, arbitrary file access and navigation are blocked; supported audio requires explicit playback.
+
+Interactive templates, typed-answer comparison, MathJax, video, SVG, reviewer-only hooks and some Anki-extracted audio/TTS are not reproduced. Missing or unsupported content shows a warning when detectable; use **Open in Anki** rather than rating an incomplete card. This is a companion, not a full replacement for Anki's renderer.
+
+## Development
+
+Built with [DroppyKit](https://getdroppy.app/docs/droppykit), Swift 6.2+ and macOS 14+. Requires Droppy 15.3+ with a compatible SDK framework.
 
 ```bash
-droppykit run        # open it in Droppy's Settings panel
-droppykit build      # produce AnkiForDroppy.droplet
-droppykit validate   # the checks the Store repository runs
-droppykit submit     # open the merge request that puts it in the Store
+swift test
+/Users/jij/droppykit/Scripts/droppykit build
+/Users/jij/droppykit/Scripts/droppykit validate
+/Users/jij/droppykit/Scripts/droppykit run -- --shots .build/shots --report .build/shots/report.json
 ```
+
+Use `droppykit build`, never a bare `swift build`, to produce the loadable bundle. Inspect screenshots and the JSON report, then install into Playground and confirm loading. The DroppyKit MCP tools provide the same loop.
+
+The harness uses injected fixtures by default, not a real Anki connection. Its screenshots cannot grade a real collection. Select another fixture with:
+
+```bash
+/Users/jij/droppykit/Scripts/droppykit run -- --scenario answer --shots .build/shots-answer --report .build/shots-answer/report.json
+```
+
+Scenarios: `question` (default), `answer`, `ready`, `paused`, `offline`, `ended`, `uncertain`, `long`, `image`, `unsupported`. Use the production bundle in Droppy/Playground for live integration checks; harness fixtures do not verify Anki's focus behavior, scheduling or host WebKit support.
 
 ## Before submitting
 
-- Leave `AnkiForDroppy.icon` as it is. It is a placeholder for the harness:
-  Jordy designs every Store droplet's icon, and `droppykit submit` leaves it
-  out. Have an idea for yours? Put it in the merge request's Icon concept
-  section.
-- Replace `Assets/Creator.png` with your own square, unrounded mark.
-- Fill in `summary`, `description` and `creator` in `droplet.json`, and
-  write `CHANGELOG.md`.
-- `droppykit submit`: the Store is a repository, one folder per droplet, and
-  this opens the merge request that adds yours. See
-  [Submitting](https://getdroppy.app/docs/droppykit/submitting).
+Leave `AnkiForDroppy.icon` unchanged. It is the placeholder; the Store's icon is designed by its maintainer. Review creator metadata, avatar, licence and changelog before running `droppykit submit`. Submission is a separate, explicit action.
