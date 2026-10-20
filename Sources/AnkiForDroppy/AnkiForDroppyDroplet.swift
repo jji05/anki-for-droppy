@@ -1,125 +1,191 @@
-//
-//  AnkiForDroppyDroplet.swift
-//  AnkiForDroppy
-//
-
+import AppKit
 import Combine
 import DroppyKit
 import SwiftUI
 
-/// The class Droppy's loader instantiates, named in the bundle's
-/// `NSPrincipalClass`. Keep it empty: it runs before the host is ready.
 @objc(AnkiForDroppyPrincipal)
 public final class AnkiForDroppyPrincipal: NSObject, DropletPrincipal {
     public override init() { super.init() }
-
     @MainActor public func makeDroplet() -> AnyObject { AnkiForDroppyDroplet() }
 }
 
-/// Anki for Droppy.
 @MainActor
 public final class AnkiForDroppyDroplet: NSObject, ObservableObject, Droplet {
-    /// Must equal `DroppyDropletID` in the bundle's Info.plist and `id` in
-    /// droplet.json. The loader refuses the bundle if the three disagree.
     public nonisolated static let id: DropletID = "anki-for-droppy"
+    package static let widgetID: ShelfWidgetID = "anki-for-droppy"
+
+    package let session: ReviewSession
+    @Published package var portText = "8765"
+    @Published package var apiKey = ""
+    @Published package var showsLiveProgress = true {
+        didSet { syncHost() }
+    }
+    @Published package private(set) var workspaceMessage: String?
 
     private var host: DropletHost?
+    private var connectionPort = 8765
+    private var lastHold = false
+    private var lastHeight = 150
+    private var isActivating = false
+    private let clientFactory: @Sendable (Int, String) -> any AnkiReviewing
+    private let onActivation: (@MainActor (ReviewSession) -> Void)?
+    private let activity = CurrentValueSubject<LiveActivityState?, Never>(nil)
+
+    public override convenience init() {
+        self.init(clientFactory: { AnkiConnectClient(port: $0, key: $1) })
+    }
+
+    package init(clientFactory: @escaping @Sendable (Int, String) -> any AnkiReviewing,
+                 onActivation: (@MainActor (ReviewSession) -> Void)? = nil) {
+        self.clientFactory = clientFactory
+        self.onActivation = onActivation
+        session = ReviewSession(client: clientFactory(8765, ""))
+        super.init()
+        session.onChange = { [weak self] in self?.syncHost() }
+    }
 
     public func activate(host: DropletHost) throws {
+        isActivating = true
+        defer { isActivating = false; syncHost() }
         self.host = host
-        host.log.info("Anki for Droppy activated")
+        connectionPort = host.preferences.value(forKey: "port", default: 8765)
+        if !(1...65535).contains(connectionPort) { connectionPort = 8765 }
+        portText = String(connectionPort)
+        showsLiveProgress = host.preferences.value(forKey: "liveProgress", default: true)
+        let selected: String = host.preferences.value(forKey: "deck", default: "")
+        let pending = host.preferences.value(forKey: "pendingGrade", as: PendingGrade.self)
+        session.replaceClient(clientFactory(connectionPort, apiKey), port: connectionPort)
+        session.activate(networkAllowed: host.isGranted(.networkClient), selectedDeck: selected, pendingGrade: pending)
+        if let onActivation {
+            onActivation(session)
+        } else if host.preferences.value(forKey: "hasConnected", default: false) {
+            session.connect()
+        }
+        host.log.info("Anki review widget activated")
     }
 
     public func deactivate() {
-        // Everything activate() started is torn down here. Swift cannot unload
-        // code, so anything left running keeps running until Droppy relaunches.
+        session.deactivate()
+        activity.send(nil)
+        if lastHold { host?.shelf.setHoldsOpen(false) }
+        lastHold = false
+        apiKey = ""
         host = nil
     }
 
-    /// What the widget's control does. Replace it with the real action.
-    public func refresh() {
-        host?.log.info("Anki for Droppy refreshed")
+    package func connect() {
+        guard let port = Int(portText), (1...65535).contains(port) else {
+            workspaceMessage = "Enter a local port between 1 and 65535."
+            return
+        }
+        workspaceMessage = nil
+        connectionPort = port
+        portText = String(port)
+        session.replaceClient(clientFactory(port, apiKey), port: port)
+        session.connect()
+    }
+
+    package func openSettings() {
+        if host?.workspace.openSettings() != true {
+            workspaceMessage = "Open this droplet's settings in Droppy."
+        }
+    }
+
+    package func openAnki() {
+        guard !session.isBusy else {
+            workspaceMessage = "Wait for the current Anki action to finish before switching reviewers."
+            return
+        }
+        session.pause()
+        let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "net.ankiweb.dtop")
+            ?? ["/Applications/Anki.app", NSHomeDirectory() + "/Applications/Anki.app"]
+                .first(where: { FileManager.default.fileExists(atPath: $0) }).map { URL(fileURLWithPath: $0) }
+        guard let url else {
+            workspaceMessage = "Anki was not found. Install or open Anki, then connect again."
+            return
+        }
+        if host?.workspace.open(url) != true { workspaceMessage = "Open Anki manually to continue." }
+    }
+
+    package func openSoloReview() {
+        guard let host, host.isGranted(.shelfWrite), host.shelf.open(revealing: Self.widgetID) else {
+            workspaceMessage = "Open this widget alone from Droppy's shelf to review cards."
+            return
+        }
+    }
+
+    private func syncHost() {
+        guard let host, !isActivating else { return }
+        host.preferences.setValue(connectionPort, forKey: "port")
+        host.preferences.setValue(session.selectedDeck, forKey: "deck")
+        host.preferences.setValue(showsLiveProgress, forKey: "liveProgress")
+        host.preferences.setValue(session.pendingGrade, forKey: "pendingGrade")
+        if session.isConnected { host.preferences.setValue(true, forKey: "hasConnected") }
+        let holds = session.isReviewing
+        if holds != lastHold {
+            if host.isGranted(.shelfWrite) { host.shelf.setHoldsOpen(holds) }
+            lastHold = holds
+        }
+        let height = session.usesReviewHeight ? 260 : 150
+        if height != lastHeight {
+            lastHeight = height
+            if host.isGranted(.shelfWrite) { host.shelf.invalidateLayout(for: Self.widgetID) }
+        }
+        if session.isReviewing && showsLiveProgress {
+            activity.send(LiveActivityState(priority: 100,
+                accessibilityTitle: "Anki review, \(session.reviewedCount) reviewed", isInteractive: false))
+        } else {
+            activity.send(nil)
+        }
     }
 }
 
-// MARK: - Shelf widget
-
 extension AnkiForDroppyDroplet: ShelfWidgetProviding {
     public var widgetDescriptors: [ShelfWidgetDescriptor] {
-        [
-            ShelfWidgetDescriptor(
-                id: "anki-for-droppy",
-                title: "Anki for Droppy",
-                systemImage: "drop.fill",
-                layoutTraits: ShelfWidgetLayoutTraits(
-                    // The CARD, in points at the Regular shelf size: the area
-                    // your view draws in, which is what the harness shows.
-                    // Droppy adds its own chrome around it. Both widths are
-                    // required; Droppy refuses a descriptor that leaves
-                    // either to a host fallback. The height is clamped to
-                    // 48 through 480 and holds in a paired row too.
-                    preferredSoloWidth: 420,
-                    preferredPairedWidth: 210,
-                    contentHeight: .fixed(150)
-                )
-            )
-        ]
+        [ShelfWidgetDescriptor(id: Self.widgetID, title: "Anki review", systemImage: "rectangle.on.rectangle",
+            layoutTraits: ShelfWidgetLayoutTraits(preferredSoloWidth: 420, preferredPairedWidth: 210,
+                contentHeight: .fixed(session.usesReviewHeight ? 260 : 150)),
+            searchKeywords: ["Anki", "flashcards", "study", "review"])]
     }
 
     public func makeWidgetView(_ id: ShelfWidgetID, context: ShelfWidgetContext) -> AnyView {
-        AnyView(AnkiForDroppyWidget(droplet: self, context: context))
+        AnyView(AnkiShelfWidget(droplet: self, session: session, context: context))
     }
 
     public func makeWidgetSettingsPopover(_ id: ShelfWidgetID) -> AnyView? { nil }
 }
 
-/// The widget.
-///
-/// Solo and paired are different compositions, not one view at two widths.
-/// Branch on `context.isCompact`, never on a width comparison.
-///
-/// The layout is the one every Droppy widget shares (Design guidelines):
-/// no card or border, the content straight on the shelf; one padding,
-/// `context.contentInsets`, which clears the host's rounded clip for this
-/// slot (8 against the 18pt card corner, 0 alone on the island, which the
-/// island shell clips), and nothing on top of it; the root
-/// fills the rectangle; a header row of symbol and title with the widget's
-/// control at its trailing end; leading text, trailing numbers; buttons are
-/// Droppy's Liquid Glass disc and pill, never a wash of your own.
-private struct AnkiForDroppyWidget: View {
-    @ObservedObject var droplet: AnkiForDroppyDroplet
-    let context: ShelfWidgetContext
+extension AnkiForDroppyDroplet: SettingsPaneProviding {
+    public func makeSettingsPane(context: SettingsPaneContext) -> AnyView {
+        AnyView(AnkiSettingsView(droplet: self, session: session))
+    }
+}
 
+extension AnkiForDroppyDroplet: LiveActivityProviding {
+    public var liveActivityState: AnyPublisher<LiveActivityState?, Never> { activity.eraseToAnyPublisher() }
+
+    public func makeCompactLeading() -> AnyView {
+        AnyView(Image(systemName: "rectangle.on.rectangle")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
+            .padding(.trailing, DroppySpacing.sm))
+    }
+
+    public func makeCompactTrailing() -> AnyView { AnyView(AnkiCompactProgress(session: session)) }
+    public func makeExpanded(context: LiveActivityContext) -> AnyView { AnyView(EmptyView()) }
+}
+
+private struct AnkiCompactProgress: View {
+    @ObservedObject var session: ReviewSession
     var body: some View {
-        VStack(alignment: .leading, spacing: DroppySpacing.sm) {
-            HStack(spacing: DroppySpacing.xsm) {
-                Image(systemName: "drop.fill")
-                    .font(.system(size: 12, weight: .medium))
-                Text("Anki for Droppy")
-                    .font(.system(size: 12, weight: .semibold))
-                Spacer(minLength: 0)
-                if !context.isCompact {
-                    // The widget's one control: the same Liquid Glass disc the
-                    // File Tray puts on an item.
-                    Button {
-                        droplet.refresh()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(DroppyCircleButtonStyle(size: 20))
-                    .help("Refresh")
-                    .accessibilityLabel("Refresh")
-                }
-            }
-            .foregroundStyle(AdaptiveColors.notchSurfaceSecondaryText)
-
-            Text(context.isCompact ? "Compact" : "Standalone")
-                .font(.system(size: 22, weight: .semibold, design: .rounded))
-                .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
-
-            Spacer(minLength: 0)
+        HStack(spacing: DroppySpacing.xsm) {
+            Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold))
+            Text("\(session.reviewedCount)").monospacedDigit().lineLimit(1)
         }
-        .padding(context.contentInsets)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .font(.system(size: 12, weight: .medium, design: .rounded))
+        .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
+        .padding(.leading, DroppySpacing.sm)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(session.reviewedCount) reviewed")
     }
 }

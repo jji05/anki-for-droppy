@@ -12,7 +12,7 @@ let package = Package(
         .library(name: "AnkiForDroppy", type: .dynamic, targets: ["AnkiForDroppy"])
     ],
     dependencies: [
-        .package(url: "https://gitlab.com/droppyformac1/droppykit.git", from: "1.6.0")
+        .package(url: "https://gitlab.com/droppyformac1/droppykit.git", from: "1.9.0")
     ],
     targets: [
         .target(
@@ -25,6 +25,10 @@ let package = Package(
                 "AnkiForDroppy",
                 .product(name: "DroppyKitHarness", package: "droppykit")
             ]
+        ),
+        .testTarget(
+            name: "AnkiForDroppyTests",
+            dependencies: ["AnkiForDroppy"]
         )
     ]
 )
