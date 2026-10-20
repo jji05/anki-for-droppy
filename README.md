@@ -77,4 +77,13 @@ ANKI_CONNECT_LIVE_TESTS=1 swift test --filter liveConnectionLoadsDecksWithoutSta
 
 ## Before submitting
 
-Leave `AnkiForDroppy.icon` unchanged. It is the placeholder; the Store's icon is designed by its maintainer. Review creator metadata, avatar, licence and changelog before running `droppykit submit`. Submission is a separate, explicit action.
+Before publishing a release:
+
+- Run the tests, universal build, validation and screenshot checks in [Development](#development). Fixture screenshots and the read-only connection test do not verify real grading or installed-host behavior.
+- Load the built bundle in Droppy or Droppy Playground and confirm it loads without errors.
+- In a disposable Anki test collection, verify start, reveal, one saved rating, next-card presentation, pause/resume and uncertain-rating recovery. Grading changes review history; do not use a personal collection for release testing without explicit approval.
+- Check that the newest `CHANGELOG.md` entry matches `version` in `droplet.json` and describes the release. The project uses the [MIT licence](LICENSE).
+
+Before Store submission, replace `Assets/Creator.png` with an owner-selected square PNG of at least 256×256 and review the creator metadata. Leave `AnkiForDroppy.icon` unchanged; the Store's icon is designed by its maintainer.
+
+A GitHub pull request does not publish the droplet. Store submission is a separate, explicit action through `droppykit submit`, which fills in the Store source URL and GitLab owner metadata. Merging, tagging and publishing a release also require separate approval.
