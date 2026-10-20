@@ -1,0 +1,28 @@
+{
+  "id": "anki-for-droppy",
+  "name": "Anki for Droppy",
+  "version": "1.0.0",
+  "summary": "One line about Anki for Droppy",
+  "description": "A longer description, in plain paragraphs.",
+  "category": "Productivity",
+  "kit": {
+    "abi": 1,
+    "minAPI": "1.6.0"
+  },
+  "minAppVersion": "15.3.0",
+  "capabilities": [],
+  "surfaces": ["shelf-widget"],
+  "icon": "AnkiForDroppy.icon",
+  "creator": {
+    "name": "jji05",
+    "kind": "community",
+    "url": "https://github.com/jji05/anki-for-droppy/",
+    "avatar": "Creator.png"
+  },
+  "source": {
+    "repository": "https://github.com/jji05/anki-for-droppy/",
+    "license": "MIT"
+  },
+  "screenshots": [],
+  "keywords": []
+}
