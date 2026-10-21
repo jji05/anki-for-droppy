@@ -134,7 +134,7 @@ struct AnkiShelfWidget: View {
             Text(session.selectedDeck.isEmpty ? "Ready when you are" : session.selectedDeck)
                 .font(.system(size: 13, weight: .medium)).lineLimit(1)
             if let deck = session.selectedDeckInfo {
-                Text(deck.dueCount.map { "\($0) due" } ?? "Due count unavailable")
+                Text(deck.dueCountText)
                     .font(.system(size: deck.dueCount == nil ? 11 : 20, weight: .semibold, design: .rounded))
                     .monospacedDigit()
             }
@@ -156,7 +156,7 @@ struct AnkiShelfWidget: View {
                     deckMenu
                     Spacer(minLength: 0)
                     if let deck = session.selectedDeckInfo {
-                        Text(deck.dueCount.map { "\($0) due" } ?? "Due count unavailable").monospacedDigit()
+                        Text(deck.dueCountText).monospacedDigit()
                             .font(.system(size: 13, weight: .medium))
                     }
                 }

@@ -14,7 +14,7 @@ The connection uses `http://127.0.0.1:8765` by default. If you changed AnkiConne
 
 If your AnkiConnect configuration requires an API key, enter it in settings. The key is kept in memory only and must be re-entered after restarting or re-enabling the droplet. It is not stored in Droppy preferences or logs.
 
-If AnkiConnect reports “Deck counts unavailable,” the connection still loads your decks and lets you start a review. The widget shows **Due count unavailable**, not zero; refresh decks when Anki can provide counts again.
+If AnkiConnect reports “Deck counts unavailable” or omits a deck's counts, the droplet automatically searches for its scheduled-due cards, including subdecks. No add-on changes or extra setup are needed. The widget labels these **scheduled due**: they exclude unseen new, suspended and buried cards, include learning cards within Anki's learn-ahead window, and do not apply daily study limits. Home and filtered deck counts can overlap. When scheduler counts work, **due** continues to include Anki's new, learning and review counts. If the installed AnkiConnect lacks the fallback search actions, missing counts remain **Due count unavailable**, never zero.
 
 ## Reviewing
 
@@ -67,7 +67,7 @@ The harness uses injected fixtures by default, not a real Anki connection. Its s
 /Users/jij/droppykit/Scripts/droppykit run -- --scenario answer --shots .build/shots-answer --report .build/shots-answer/report.json
 ```
 
-Scenarios: `question` (default), `answer`, `ready`, `counts-unavailable`, `paused`, `offline`, `ended`, `uncertain`, `long`, `image`, `unsupported`. Use the production bundle in Droppy/Playground for live integration checks; harness fixtures do not verify Anki's focus behavior, scheduling or host WebKit support.
+Scenarios: `question` (default), `answer`, `ready`, `scheduled-due`, `counts-unavailable`, `paused`, `offline`, `ended`, `uncertain`, `long`, `image`, `unsupported`. Use the production bundle in Droppy/Playground for live integration checks; harness fixtures do not verify Anki's focus behavior, scheduling or host WebKit support.
 
 To test the real connection on the default port without starting a review or grading cards, keep Anki running with AnkiConnect and no API key required, then run:
 
