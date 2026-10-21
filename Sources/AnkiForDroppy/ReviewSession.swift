@@ -149,6 +149,20 @@ package final class ReviewSession: ObservableObject {
         }
     }
 
+    package func replayAudio() {
+        guard isReviewing, let expected = card?.cardId, pendingGrade == nil else { return }
+        let showsAnswer = phase == .answer
+        perform { session, token in
+            do {
+                try await session.client.replayAudio(cardID: expected, showsAnswer: showsAnswer)
+                guard session.isCurrent(token) else { return }
+                session.message = nil
+            } catch {
+                session.handle(error, token: token)
+            }
+        }
+    }
+
     package func grade(_ ease: Int) {
         guard phase == .answer, let card, card.ratings.contains(where: { $0.ease == ease }), pendingGrade == nil else { return }
         let cardID = card.cardId

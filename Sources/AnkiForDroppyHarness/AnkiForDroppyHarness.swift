@@ -22,7 +22,7 @@ struct AnkiForDroppyHarness: DropletHarnessApp {
                     .contains(scenario) else { return }
                 session.start()
                 await session.waitUntilIdle()
-                if scenario == "answer" || scenario == "uncertain" {
+                if scenario == "answer" || scenario == "audio-answer" || scenario == "uncertain" {
                     session.reveal()
                     await session.waitUntilIdle()
                 }
@@ -78,6 +78,7 @@ private actor PreviewAnkiClient: AnkiReviewing {
     func showQuestion(cardID: Int64) async throws -> AnkiCard { try requireCard(cardID) }
     func showAnswer(cardID: Int64) async throws -> AnkiCard { try requireCard(cardID) }
     func resetTimer() async throws {}
+    func replayAudio(cardID: Int64, showsAnswer: Bool) async throws { _ = try requireCard(cardID) }
 
     func answer(cardID: Int64, ease: Int) async throws {
         _ = try requireCard(cardID)
@@ -120,9 +121,14 @@ private actor PreviewAnkiClient: AnkiReviewing {
         } else if scenario == "unsupported" {
             question += "<script>window.example = true;</script><p>\\(x^2\\)</p>"
         }
+        let audio = scenario == "audio-answer"
+        let answer = audio
+            ? "[anki:play:a:0][anki:play:a:1]<div class=term>かなり</div><div class=meaning>Considerably</div>"
+            : "<div class=term>\(word.0)</div><hr id=answer><div class=meaning>\(word.2)</div><div class=reading>\(word.1)</div>"
         return AnkiCard(cardId: 1_700_000_001_000 + Int64(index), question: question,
-            answer: "<div class=term>\(word.0)</div><hr id=answer><div class=meaning>\(word.2)</div><div class=reading>\(word.1)</div>",
+            answer: answer,
             css: ".card { font-family: -apple-system; text-align: center; } .term { font-size: 32px; font-weight: 500; margin: 10px 0; } .hint { font-size: 12px; color: #999; } .meaning { font-size: 20px; margin: 8px 0; } .reading { color: #aaa; font-size: 14px; } hr { border: 0; height: 1px; background: #333; margin: 10px 20%; }",
-            deckName: "Japanese", nextReviews: ["<1m", "<6m", "10m", "4d"])
+            deckName: "Japanese", nextReviews: ["<1m", "<6m", "10m", "4d"],
+            fields: audio ? ["Audio": .init(value: "[sound:word.mp3][sound:sentence.mp3]")] : [:])
     }
 }

@@ -345,7 +345,7 @@ struct AnkiConnectClientTests {
         }
     }
 
-    @Test(arguments: ["denied", "requireApikey", "requireApiKey", "old-version", "missing-action", "unauthorized"])
+    @Test(arguments: ["denied", "requireApikey", "requireApiKey", "old-version", "missing-action", "missing-audio", "unauthorized"])
     func handshakeStopsBeforeDeckReadsWhenAccessIsNotReady(_ scenario: String) async throws {
         let replies: [ClientReply]
         let expected: AnkiError
@@ -359,8 +359,9 @@ struct AnkiConnectClientTests {
         case "old-version":
             replies = [permission(), .json(#"{"result":5,"error":null}"#)]
             expected = .incompatible
-        case "missing-action":
-            replies = [permission(), .json(#"{"result":6,"error":null}"#), reflection(omitting: "guiAnswerCard")]
+        case "missing-action", "missing-audio":
+            replies = [permission(), .json(#"{"result":6,"error":null}"#),
+                       reflection(omitting: scenario == "missing-audio" ? "guiPlayAudio" : "guiAnswerCard")]
             expected = .incompatible
         default:
             replies = [.json(#"{"result":null,"error":"Invalid API key"}"#)]
@@ -460,6 +461,94 @@ struct AnkiConnectClientTests {
         try expectRequest(requests[0], action: "guiCurrentCard")
         try expectRequest(requests[1], action: action)
         try expectRequest(requests[2], action: "guiCurrentCard")
+    }
+
+    @Test(arguments: [false, true])
+    func replaySynchronizesTheRequestedSideBeforePlayingAudio(_ showsAnswer: Bool) async throws {
+        let fixture = ClientFixture([
+            cardReply(), .json(#"{"result":true,"error":null}"#), cardReply(),
+            .json(#"{"result":true,"error":null}"#)
+        ])
+
+        try await fixture.client.replayAudio(cardID: 42, showsAnswer: showsAnswer)
+
+        let requests = try fixture.requests(count: 4)
+        try expectRequest(requests[0], action: "guiCurrentCard")
+        try expectRequest(requests[1], action: showsAnswer ? "guiShowAnswer" : "guiShowQuestion")
+        try expectRequest(requests[2], action: "guiCurrentCard")
+        try expectRequest(requests[3], action: "guiPlayAudio")
+    }
+
+    @Test(arguments: [false, true], ["wrong-before", "missing-before", "wrong-after", "missing-after"])
+    func replayNeverPlaysForAChangedOrMissingCard(_ showsAnswer: Bool, _ scenario: String) async throws {
+        let invalidCard: ClientReply = scenario.hasPrefix("wrong")
+            ? cardReply(id: 43) : .json(#"{"result":null,"error":null}"#)
+        let after = scenario.hasSuffix("after")
+        let replies: [ClientReply] = after
+            ? [cardReply(), .json(#"{"result":true,"error":null}"#), invalidCard] : [invalidCard]
+        let fixture = ClientFixture(replies)
+
+        await expectError(.changedCard) {
+            try await fixture.client.replayAudio(cardID: 42, showsAnswer: showsAnswer)
+        }
+
+        let requests = try fixture.requests(count: replies.count)
+        try expectRequest(requests[0], action: "guiCurrentCard")
+        if after {
+            try expectRequest(requests[1], action: showsAnswer ? "guiShowAnswer" : "guiShowQuestion")
+            try expectRequest(requests[2], action: "guiCurrentCard")
+        }
+    }
+
+    @Test(arguments: [false, true], ["side-false", "audio-false", "audio-error", "audio-timeout", "audio-null"])
+    func replayFailuresAreReportedWithoutRetrying(_ showsAnswer: Bool, _ scenario: String) async throws {
+        let reply: ClientReply
+        let expected: AnkiError
+        switch scenario {
+        case "audio-error":
+            reply = .json(#"{"result":null,"error":"failed to play audio"}"#)
+            expected = .server
+        case "audio-timeout":
+            reply = .failure(.timedOut)
+            expected = .unavailable
+        case "audio-null":
+            reply = .json(#"{"result":null,"error":null}"#)
+            expected = .invalidResponse
+        default:
+            reply = .json(#"{"result":false,"error":null}"#)
+            expected = .rejected
+        }
+        let replies: [ClientReply] = scenario == "side-false" ? [cardReply(), reply] : [
+            cardReply(), .json(#"{"result":true,"error":null}"#), cardReply(), reply
+        ]
+        let fixture = ClientFixture(replies)
+
+        await expectError(expected) {
+            try await fixture.client.replayAudio(cardID: 42, showsAnswer: showsAnswer)
+        }
+
+        let requests = try fixture.requests(count: replies.count)
+        try expectRequest(requests[0], action: "guiCurrentCard")
+        try expectRequest(requests[1], action: showsAnswer ? "guiShowAnswer" : "guiShowQuestion")
+        if scenario != "side-false" {
+            try expectRequest(requests[2], action: "guiCurrentCard")
+            try expectRequest(requests[3], action: "guiPlayAudio")
+        }
+    }
+
+    @Test func cancelledReplayPropagatesCancellationWithoutRetrying() async throws {
+        let fixture = ClientFixture([
+            cardReply(), .json(#"{"result":true,"error":null}"#), cardReply(), .failure(.cancelled)
+        ])
+
+        do {
+            try await fixture.client.replayAudio(cardID: 42, showsAnswer: false)
+            Issue.record("Expected cancellation")
+        } catch {
+            #expect(error is CancellationError)
+        }
+
+        try expectRequest(try fixture.requests(count: 4)[3], action: "guiPlayAudio")
     }
 
     @Test(arguments: [
@@ -611,7 +700,7 @@ private func permission() -> ClientReply {
 private func reflection(omitting action: String? = nil) -> ClientReply {
     let actions: [String] = [
         "deckNames", "getDeckStats", "guiDeckReview", "guiCurrentCard", "guiShowQuestion",
-        "guiShowAnswer", "guiAnswerCard", "guiStartCardTimer", "getReviewsOfCards", "retrieveMediaFile",
+        "guiShowAnswer", "guiPlayAudio", "guiAnswerCard", "guiStartCardTimer", "getReviewsOfCards", "retrieveMediaFile",
         "deckNamesAndIds", "findCards"
     ].filter { $0 != action }
     let list = actions.map { "\"\($0)\"" }.joined(separator: ",")
