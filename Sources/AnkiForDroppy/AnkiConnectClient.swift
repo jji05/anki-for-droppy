@@ -6,25 +6,15 @@ package struct AnkiDeck: Identifiable, Equatable, Sendable {
     package let newCount: Int?
     package let learningCount: Int?
     package let reviewCount: Int?
-    package let scheduledDueCount: Int?
-    package var dueCount: Int? {
-        guard let newCount, let learningCount, let reviewCount else { return nil }
-        return newCount + learningCount + reviewCount
-    }
-
-    package var dueCountText: String {
-        if let dueCount { return "\(dueCount) due" }
-        if let scheduledDueCount { return "\(scheduledDueCount) scheduled due" }
-        return "Due count unavailable"
-    }
+    package let countsAreFromSearch: Bool
 
     package init(name: String, newCount: Int? = nil, learningCount: Int? = nil, reviewCount: Int? = nil,
-                 scheduledDueCount: Int? = nil) {
+                 countsAreFromSearch: Bool = false) {
         self.name = name
         self.newCount = newCount.map { min(1_000_000_000, max(0, $0)) }
         self.learningCount = learningCount.map { min(1_000_000_000, max(0, $0)) }
         self.reviewCount = reviewCount.map { min(1_000_000_000, max(0, $0)) }
-        self.scheduledDueCount = scheduledDueCount.map { min(1_000_000_000, max(0, $0)) }
+        self.countsAreFromSearch = countsAreFromSearch
     }
 }
 
@@ -210,23 +200,31 @@ package actor AnkiConnectClient: AnkiReviewing {
         }
         var decks: [AnkiDeck] = []
         for name in names.sorted(by: { $0.localizedStandardCompare($1) == .orderedAscending }) {
-            let counts = statsByName[name]
-            var scheduledDueCount: Int?
-            if counts == nil, deckIDs[name] != nil {
+            if let counts = statsByName[name] {
+                decks.append(AnkiDeck(name: name, newCount: counts.new_count,
+                    learningCount: counts.learn_count, reviewCount: counts.review_count))
+            } else if deckIDs[name] != nil {
                 let ids = deckIDs.filter { $0.key == name || $0.key.hasPrefix(name + "::") }
                     .values.sorted().map(String.init).joined(separator: ",")
-                let cards: [Int64] = try await request("findCards",
-                    parameters: .query("did:\(ids) is:due -is:suspended -is:buried"))
-                guard cards.allSatisfy({ $0 > 0 }), Set(cards).count == cards.count else {
-                    throw AnkiError.invalidResponse
-                }
-                scheduledDueCount = cards.count
+                let scope = "did:\(ids) -is:suspended -is:buried"
+                let newCount = try await cardCount(query: "\(scope) is:new")
+                let learningCount = try await cardCount(query: "\(scope) is:learn is:due")
+                let reviewCount = try await cardCount(query: "\(scope) is:review -is:learn is:due")
+                decks.append(AnkiDeck(name: name, newCount: newCount,
+                    learningCount: learningCount, reviewCount: reviewCount, countsAreFromSearch: true))
+            } else {
+                decks.append(AnkiDeck(name: name))
             }
-            decks.append(AnkiDeck(name: name, newCount: counts?.new_count,
-                learningCount: counts?.learn_count, reviewCount: counts?.review_count,
-                scheduledDueCount: scheduledDueCount))
         }
         return decks
+    }
+
+    private func cardCount(query: String) async throws -> Int {
+        let cards: [Int64] = try await request("findCards", parameters: .query(query))
+        guard cards.allSatisfy({ $0 > 0 }), Set(cards).count == cards.count else {
+            throw AnkiError.invalidResponse
+        }
+        return cards.count
     }
 
     package func start(deck: String) async throws -> AnkiCard? {
