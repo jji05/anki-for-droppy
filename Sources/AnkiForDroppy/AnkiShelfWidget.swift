@@ -134,9 +134,7 @@ struct AnkiShelfWidget: View {
             Text(session.selectedDeck.isEmpty ? "Ready when you are" : session.selectedDeck)
                 .font(.system(size: 13, weight: .medium)).lineLimit(1)
             if let deck = session.selectedDeckInfo {
-                Text(deck.dueCount.map { "\($0) due" } ?? "Due count unavailable")
-                    .font(.system(size: deck.dueCount == nil ? 11 : 20, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
+                deckCounts(deck)
             }
             if session.isConnected {
                 Button("Open review") { droplet.openSoloReview() }
@@ -155,10 +153,9 @@ struct AnkiShelfWidget: View {
                 HStack {
                     deckMenu
                     Spacer(minLength: 0)
-                    if let deck = session.selectedDeckInfo {
-                        Text(deck.dueCount.map { "\($0) due" } ?? "Due count unavailable").monospacedDigit()
-                            .font(.system(size: 13, weight: .medium))
-                    }
+                }
+                if let deck = session.selectedDeckInfo {
+                    deckCounts(deck)
                 }
                 HStack {
                     Button("Start review") { session.start() }
@@ -212,6 +209,36 @@ struct AnkiShelfWidget: View {
             }
             if let message = droplet.workspaceMessage { statusText(message) }
         }
+    }
+
+    private func deckCounts(_ deck: AnkiDeck) -> some View {
+        HStack(spacing: DroppySpacing.sm) {
+            deckCount("New", count: deck.newCount)
+            deckCount("Learn", count: deck.learningCount)
+            deckCount("Due", count: deck.reviewCount)
+        }
+        .help(deck.countsAreFromSearch
+            ? "New is unavailable. Learn and Due are search counts, not Anki's daily-limited scheduler counts, and may differ from its deck list. Learn includes learning and relearning within the learn-ahead window; Due excludes learning."
+            : "Anki's scheduler counts for new, learning and due review cards. Unavailable counts appear as a dash.")
+    }
+
+    private func deckCount(_ title: String, count: Int?) -> some View {
+        VStack(alignment: .leading, spacing: DroppySpacing.xsm) {
+            Text(title)
+                .font(.system(size: 10))
+                .foregroundStyle(AdaptiveColors.notchSurfaceSecondaryText)
+            Text(count.map {
+                context.isPaired ? $0.formatted(.number.notation(.compactName)) : $0.formatted()
+            } ?? "—")
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(count.map(String.init) ?? "Unavailable")
     }
 
     private var deckMenu: some View {

@@ -6,16 +6,15 @@ package struct AnkiDeck: Identifiable, Equatable, Sendable {
     package let newCount: Int?
     package let learningCount: Int?
     package let reviewCount: Int?
-    package var dueCount: Int? {
-        guard let newCount, let learningCount, let reviewCount else { return nil }
-        return newCount + learningCount + reviewCount
-    }
+    package let countsAreFromSearch: Bool
 
-    package init(name: String, newCount: Int? = nil, learningCount: Int? = nil, reviewCount: Int? = nil) {
+    package init(name: String, newCount: Int? = nil, learningCount: Int? = nil, reviewCount: Int? = nil,
+                 countsAreFromSearch: Bool = false) {
         self.name = name
         self.newCount = newCount.map { min(1_000_000_000, max(0, $0)) }
         self.learningCount = learningCount.map { min(1_000_000_000, max(0, $0)) }
         self.reviewCount = reviewCount.map { min(1_000_000_000, max(0, $0)) }
+        self.countsAreFromSearch = countsAreFromSearch
     }
 }
 
@@ -189,11 +188,52 @@ package actor AnkiConnectClient: AnkiReviewing {
         } catch RequestFailure.unavailableDeckCounts {
             stats = [:]
         }
-        return names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.map { name in
-            let counts = stats.values.first { $0.name == name }
-            return AnkiDeck(name: name, newCount: counts?.new_count,
-                            learningCount: counts?.learn_count, reviewCount: counts?.review_count)
+        var statsByName = Dictionary(stats.values.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        if names.count > 1 {
+            for name in names where statsByName[name] == nil {
+                do {
+                    let recovered: [String: DeckStats] = try await request("getDeckStats", parameters: .decks([name]))
+                    if let counts = recovered.values.first(where: { $0.name == name }) {
+                        statsByName[name] = counts
+                    }
+                } catch RequestFailure.unavailableDeckCounts {}
+            }
         }
+        let deckIDs: [String: Int64]
+        if names.contains(where: { statsByName[$0] == nil }),
+           Set(["deckNamesAndIds", "findCards"]).isSubset(of: Set(reflection.actions)) {
+            deckIDs = try await request("deckNamesAndIds")
+            guard deckIDs.count <= 5_000, deckIDs.values.allSatisfy({ $0 > 0 }),
+                  Set(deckIDs.values).count == deckIDs.count else { throw AnkiError.invalidResponse }
+        } else {
+            deckIDs = [:]
+        }
+        var decks: [AnkiDeck] = []
+        for name in names.sorted(by: { $0.localizedStandardCompare($1) == .orderedAscending }) {
+            if let counts = statsByName[name] {
+                decks.append(AnkiDeck(name: name, newCount: counts.new_count,
+                    learningCount: counts.learn_count, reviewCount: counts.review_count))
+            } else if deckIDs[name] != nil {
+                let ids = deckIDs.filter { $0.key == name || $0.key.hasPrefix(name + "::") }
+                    .values.sorted().map(String.init).joined(separator: ",")
+                let scope = "did:\(ids) -is:suspended -is:buried"
+                let learningCount = try await cardCount(query: "\(scope) is:learn is:due")
+                let reviewCount = try await cardCount(query: "\(scope) is:review -is:learn is:due")
+                decks.append(AnkiDeck(name: name,
+                    learningCount: learningCount, reviewCount: reviewCount, countsAreFromSearch: true))
+            } else {
+                decks.append(AnkiDeck(name: name))
+            }
+        }
+        return decks
+    }
+
+    private func cardCount(query: String) async throws -> Int {
+        let cards: [Int64] = try await request("findCards", parameters: .query(query))
+        guard cards.allSatisfy({ $0 > 0 }), Set(cards).count == cards.count else {
+            throw AnkiError.invalidResponse
+        }
+        return cards.count
     }
 
     package func start(deck: String) async throws -> AnkiCard? {
@@ -325,8 +365,8 @@ package actor AnkiConnectClient: AnkiReviewing {
     }
 
     private enum Parameters: Encodable {
-        case empty, reflect, decks([String]), name(String), ease(Int), cards([Int64]), filename(String)
-        private enum Keys: String, CodingKey { case scopes, decks, name, ease, cards, filename }
+        case empty, reflect, decks([String]), name(String), ease(Int), cards([Int64]), filename(String), query(String)
+        private enum Keys: String, CodingKey { case scopes, decks, name, ease, cards, filename, query }
         func encode(to encoder: any Encoder) throws {
             var values = encoder.container(keyedBy: Keys.self)
             switch self {
@@ -337,6 +377,7 @@ package actor AnkiConnectClient: AnkiReviewing {
             case .ease(let ease): try values.encode(ease, forKey: .ease)
             case .cards(let cards): try values.encode(cards, forKey: .cards)
             case .filename(let filename): try values.encode(filename, forKey: .filename)
+            case .query(let query): try values.encode(query, forKey: .query)
             }
         }
     }

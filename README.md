@@ -14,7 +14,11 @@ The connection uses `http://127.0.0.1:8765` by default. If you changed AnkiConne
 
 If your AnkiConnect configuration requires an API key, enter it in settings. The key is kept in memory only and must be re-entered after restarting or re-enabling the droplet. It is not stored in Droppy preferences or logs.
 
-If AnkiConnect reports “Deck counts unavailable,” the connection still loads your decks and lets you start a review. The widget shows **Due count unavailable**, not zero; refresh decks when Anki can provide counts again.
+The widget shows **New**, **Learn** and **Due** from Anki's scheduler, including today's new-card allowance rather than the unseen backlog. Learn includes learning and relearning cards; Due shows reviews without counting relearning again.
+
+If a combined count request fails or omits a deck, the droplet retries the missing decks individually so one unavailable deck does not discard the others' scheduler counts. No add-on changes or extra setup are needed.
+
+For a deck whose scheduler counts remain unavailable, the droplet falls back to searches for scheduled **Learn** and **Due** cards in that deck and its subdecks. All three columns stay visible, with unavailable **New** shown as **—**, never the unseen backlog or an invented zero. Search counts exclude suspended and buried cards and include Anki's learn-ahead window, but do not apply daily study limits and can differ from Anki's deck list; hover over the counts for a reminder. Home and filtered deck counts can overlap. Any missing count appears as **—**.
 
 ## Reviewing
 
@@ -67,7 +71,7 @@ The harness uses injected fixtures by default, not a real Anki connection. Its s
 /Users/jij/droppykit/Scripts/droppykit run -- --scenario answer --shots .build/shots-answer --report .build/shots-answer/report.json
 ```
 
-Scenarios: `question` (default), `answer`, `ready`, `counts-unavailable`, `paused`, `offline`, `ended`, `uncertain`, `long`, `image`, `unsupported`. Use the production bundle in Droppy/Playground for live integration checks; harness fixtures do not verify Anki's focus behavior, scheduling or host WebKit support.
+Scenarios: `question` (default), `answer`, `ready`, `search-counts`, `counts-zero`, `counts-large`, `counts-unavailable`, `paused`, `offline`, `ended`, `uncertain`, `long`, `image`, `unsupported`. Use the production bundle in Droppy/Playground for live integration checks; harness fixtures do not verify Anki's focus behavior, scheduling or host WebKit support.
 
 To test the real connection on the default port without starting a review or grading cards, keep Anki running with AnkiConnect and no API key required, then run:
 
