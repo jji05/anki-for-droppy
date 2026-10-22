@@ -188,7 +188,17 @@ package actor AnkiConnectClient: AnkiReviewing {
         } catch RequestFailure.unavailableDeckCounts {
             stats = [:]
         }
-        let statsByName = Dictionary(stats.values.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        var statsByName = Dictionary(stats.values.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        if names.count > 1 {
+            for name in names where statsByName[name] == nil {
+                do {
+                    let recovered: [String: DeckStats] = try await request("getDeckStats", parameters: .decks([name]))
+                    if let counts = recovered.values.first(where: { $0.name == name }) {
+                        statsByName[name] = counts
+                    }
+                } catch RequestFailure.unavailableDeckCounts {}
+            }
+        }
         let deckIDs: [String: Int64]
         if names.contains(where: { statsByName[$0] == nil }),
            Set(["deckNamesAndIds", "findCards"]).isSubset(of: Set(reflection.actions)) {
@@ -207,10 +217,9 @@ package actor AnkiConnectClient: AnkiReviewing {
                 let ids = deckIDs.filter { $0.key == name || $0.key.hasPrefix(name + "::") }
                     .values.sorted().map(String.init).joined(separator: ",")
                 let scope = "did:\(ids) -is:suspended -is:buried"
-                let newCount = try await cardCount(query: "\(scope) is:new")
                 let learningCount = try await cardCount(query: "\(scope) is:learn is:due")
                 let reviewCount = try await cardCount(query: "\(scope) is:review -is:learn is:due")
-                decks.append(AnkiDeck(name: name, newCount: newCount,
+                decks.append(AnkiDeck(name: name,
                     learningCount: learningCount, reviewCount: reviewCount, countsAreFromSearch: true))
             } else {
                 decks.append(AnkiDeck(name: name))

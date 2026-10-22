@@ -48,17 +48,20 @@ private actor PreviewAnkiClient: AnkiReviewing {
     func decks() async throws -> [AnkiDeck] {
         if scenario == "offline" { throw AnkiError.unavailable }
         if scenario == "counts-unavailable" { return [AnkiDeck(name: "Japanese"), AnkiDeck(name: "Biology")] }
+        if scenario == "ready" {
+            return [AnkiDeck(name: "Core 2000", newCount: 8, learningCount: 0, reviewCount: 163),
+                    AnkiDeck(name: "Biology", newCount: 0, learningCount: 1, reviewCount: 8)]
+        }
         if scenario == "search-counts" {
-            return [AnkiDeck(name: "Japanese", newCount: 120, learningCount: 4, reviewCount: 280, countsAreFromSearch: true),
-                    AnkiDeck(name: "Biology", newCount: 0, learningCount: 0, reviewCount: 0, countsAreFromSearch: true)]
+            return [AnkiDeck(name: "Japanese", learningCount: 4, reviewCount: 280, countsAreFromSearch: true),
+                    AnkiDeck(name: "Biology", learningCount: 0, reviewCount: 0, countsAreFromSearch: true)]
         }
         if scenario == "counts-zero" {
             return [AnkiDeck(name: "Japanese", newCount: 0, learningCount: 0, reviewCount: 0)]
         }
         if scenario == "counts-large" {
             return [AnkiDeck(name: "A very long deck name with many nested study topics",
-                newCount: 1_000_000_000, learningCount: 1_000_000_000, reviewCount: 1_000_000_000,
-                countsAreFromSearch: true)]
+                newCount: 1_000_000_000, learningCount: 1_000_000_000, reviewCount: 1_000_000_000)]
         }
         return [AnkiDeck(name: "Japanese", newCount: 3, learningCount: 2, reviewCount: 7),
                 AnkiDeck(name: "Biology", newCount: 0, learningCount: 1, reviewCount: 8)]

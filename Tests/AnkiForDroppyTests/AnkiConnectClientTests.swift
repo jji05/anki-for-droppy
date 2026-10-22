@@ -28,15 +28,133 @@ struct AnkiConnectClientTests {
         try expectRequest(requests[4], action: "getDeckStats", params: ["decks": ["Deck 10", "Deck 2"]], key: "test-only-key", port: 9876)
     }
 
+    @Test(arguments: ["all", "findCards", "deckNamesAndIds"])
+    func failedBatchRecoversExactCountsForAvailableDecks(_ omittedAction: String) async throws {
+        var replies: [ClientReply] = [
+            permission(), .json(#"{"result":6,"error":null}"#),
+            reflection(omitting: omittedAction == "all" ? nil : omittedAction),
+            .json(#"{"result":["Default","Core 2000"],"error":null}"#),
+            .json(#"{"result":null,"error":"Deck counts unavailable."}"#),
+            .json(#"{"result":null,"error":"Deck counts unavailable."}"#),
+            .json(#"{"result":{"123":{"name":"Core 2000","new_count":8,"learn_count":0,"review_count":163}},"error":null}"#)
+        ]
+        if omittedAction == "all" {
+            replies += [
+                .json(#"{"result":{"Default":1,"Core 2000":123},"error":null}"#),
+                .json(#"{"result":[],"error":null}"#),
+                .json(#"{"result":[],"error":null}"#)
+            ]
+        }
+        let fixture = ClientFixture(replies, key: "test-only-key", port: 9876)
+
+        let decks = try await fixture.client.decks()
+
+        #expect(decks == [
+            AnkiDeck(name: "Core 2000", newCount: 8, learningCount: 0, reviewCount: 163),
+            omittedAction == "all"
+                ? AnkiDeck(name: "Default", learningCount: 0, reviewCount: 0, countsAreFromSearch: true)
+                : AnkiDeck(name: "Default")
+        ])
+        let requests = try fixture.requests(count: omittedAction == "all" ? 10 : 7)
+        try expectRequest(requests[4], action: "getDeckStats", params: ["decks": ["Default", "Core 2000"]],
+            key: "test-only-key", port: 9876)
+        try expectRequest(requests[5], action: "getDeckStats", params: ["decks": ["Default"]],
+            key: "test-only-key", port: 9876)
+        try expectRequest(requests[6], action: "getDeckStats", params: ["decks": ["Core 2000"]],
+            key: "test-only-key", port: 9876)
+        if omittedAction == "all" {
+            try expectRequest(requests[7], action: "deckNamesAndIds", key: "test-only-key", port: 9876)
+            for (offset, filter) in ["is:learn is:due", "is:review -is:learn is:due"].enumerated() {
+                try expectRequest(requests[8 + offset], action: "findCards",
+                    params: ["query": "did:1 -is:suspended -is:buried \(filter)"], key: "test-only-key", port: 9876)
+            }
+        }
+    }
+
+    @Test func partialBatchRecoversOnlyMissingDecksAndPreservesSuccessfulCounts() async throws {
+        let fixture = ClientFixture(handshakePrefix() + [
+            .json(#"{"result":["Available","Core 2000"],"error":null}"#),
+            .json(#"{"result":{"1":{"name":"Available","new_count":3,"learn_count":2,"review_count":1}},"error":null}"#),
+            .json(#"{"result":{"1":{"name":"Available","new_count":99,"learn_count":99,"review_count":99},"2":{"name":"Core 2000","new_count":8,"learn_count":0,"review_count":163}},"error":null}"#)
+        ])
+
+        #expect(try await fixture.client.decks() == [
+            AnkiDeck(name: "Available", newCount: 3, learningCount: 2, reviewCount: 1),
+            AnkiDeck(name: "Core 2000", newCount: 8, learningCount: 0, reviewCount: 163)
+        ])
+        let requests = try fixture.requests(count: 6)
+        try expectRequest(requests[5], action: "getDeckStats", params: ["decks": ["Core 2000"]])
+    }
+
+    @Test(arguments: ["{}", #"{"99":{"name":"Other","new_count":8,"learn_count":0,"review_count":163}}"#])
+    func recoveryWithoutMatchingStatsLeavesCountsUnknown(_ result: String) async throws {
+        let fixture = ClientFixture([
+            permission(), .json(#"{"result":6,"error":null}"#), reflection(omitting: "findCards"),
+            .json(#"{"result":["Available","Missing"],"error":null}"#),
+            .json(#"{"result":{"1":{"name":"Available","new_count":0,"learn_count":0,"review_count":0}},"error":null}"#),
+            .json("{\"result\":\(result),\"error\":null}")
+        ])
+
+        #expect(try await fixture.client.decks() == [
+            AnkiDeck(name: "Available", newCount: 0, learningCount: 0, reviewCount: 0),
+            AnkiDeck(name: "Missing")
+        ])
+        let requests = try fixture.requests(count: 6)
+        try expectRequest(requests[5], action: "getDeckStats", params: ["decks": ["Missing"]])
+    }
+
+    @Test func missingSingletonStatsAreNotRetried() async throws {
+        let fixture = ClientFixture([
+            permission(), .json(#"{"result":6,"error":null}"#), reflection(omitting: "findCards"),
+            .json(#"{"result":["Existing"],"error":null}"#),
+            .json(#"{"result":{},"error":null}"#)
+        ])
+
+        #expect(try await fixture.client.decks() == [AnkiDeck(name: "Existing")])
+        _ = try fixture.requests(count: 5)
+    }
+
+    @Test(arguments: ["Invalid API key", "unsupported action", "other failure"])
+    func recoveryErrorsAreNotHiddenBySearchFallback(_ message: String) async throws {
+        let fixture = ClientFixture(recoveryPrefix()
+            + [.json("{\"result\":null,\"error\":\"\(message)\"}")])
+        let expected: AnkiError = switch message {
+        case "Invalid API key": .authorization
+        case "unsupported action": .incompatible
+        default: .server
+        }
+
+        await expectError(expected) { _ = try await fixture.client.decks() }
+        _ = try fixture.requests(count: 6)
+    }
+
+    @Test(arguments: ["null", "false", #"{"1":{"name":"First","new_count":"8","learn_count":0,"review_count":163}}"#])
+    func malformedRecoveryStatsAreRejected(_ result: String) async throws {
+        let fixture = ClientFixture(recoveryPrefix() + [.json("{\"result\":\(result),\"error\":null}")])
+
+        await expectError(.invalidResponse) { _ = try await fixture.client.decks() }
+        _ = try fixture.requests(count: 6)
+    }
+
+    @Test(arguments: [0, 1])
+    func recoveryPreservesCancellation(_ completedDecks: Int) async throws {
+        let fixture = ClientFixture(recoveryPrefix()
+            + Array(repeating: .json(#"{"result":null,"error":"Deck counts unavailable."}"#), count: completedDecks)
+            + [.failure(.cancelled)])
+
+        await #expect(throws: CancellationError.self) { _ = try await fixture.client.decks() }
+        _ = try fixture.requests(count: 6 + completedDecks)
+    }
+
     @Test func unavailableDeckCountsUseSeparateSearches() async throws {
         let fixture = ClientFixture(handshakePrefix() + [
             .json(#"{"result":["Deck 10","Deck 2"],"error":null}"#),
             .json(#"{"result":null,"error":"Deck counts unavailable."}"#),
+            .json(#"{"result":null,"error":"Deck counts unavailable."}"#),
+            .json(#"{"result":null,"error":"Deck counts unavailable."}"#),
             .json(#"{"result":{"Deck 10":10,"Deck 2":2},"error":null}"#),
             .json(#"{"result":[],"error":null}"#),
             .json(#"{"result":[],"error":null}"#),
-            .json(#"{"result":[],"error":null}"#),
-            .json(#"{"result":[201,202],"error":null}"#),
             .json(#"{"result":[301],"error":null}"#),
             .json(#"{"result":[401,402,403],"error":null}"#)
         ])
@@ -44,14 +162,17 @@ struct AnkiConnectClientTests {
         let decks = try await fixture.client.decks()
 
         #expect(decks == [
-            AnkiDeck(name: "Deck 2", newCount: 0, learningCount: 0, reviewCount: 0, countsAreFromSearch: true),
-            AnkiDeck(name: "Deck 10", newCount: 2, learningCount: 1, reviewCount: 3, countsAreFromSearch: true)
+            AnkiDeck(name: "Deck 2", learningCount: 0, reviewCount: 0, countsAreFromSearch: true),
+            AnkiDeck(name: "Deck 10", learningCount: 1, reviewCount: 3, countsAreFromSearch: true)
         ])
+        #expect(decks.allSatisfy { $0.newCount == nil })
         let requests = try fixture.requests(count: 12)
         try expectRequest(requests[4], action: "getDeckStats", params: ["decks": ["Deck 10", "Deck 2"]])
-        try expectRequest(requests[5], action: "deckNamesAndIds")
-        for (start, ids) in [(6, "2"), (9, "10")] {
-            for (offset, filter) in ["is:new", "is:learn is:due", "is:review -is:learn is:due"].enumerated() {
+        try expectRequest(requests[5], action: "getDeckStats", params: ["decks": ["Deck 10"]])
+        try expectRequest(requests[6], action: "getDeckStats", params: ["decks": ["Deck 2"]])
+        try expectRequest(requests[7], action: "deckNamesAndIds")
+        for (start, ids) in [(8, "2"), (10, "10")] {
+            for (offset, filter) in ["is:learn is:due", "is:review -is:learn is:due"].enumerated() {
                 try expectRequest(requests[start + offset], action: "findCards",
                     params: ["query": "did:\(ids) -is:suspended -is:buried \(filter)"])
             }
@@ -78,8 +199,8 @@ struct AnkiConnectClientTests {
         let fixture = ClientFixture(handshakePrefix() + [
             .json(#"{"result":["Available","Missing"],"error":null}"#),
             .json(#"{"result":{"123":{"name":"Available","new_count":0,"learn_count":0,"review_count":0}},"error":null}"#),
+            .json(#"{"result":null,"error":"Deck counts unavailable."}"#),
             .json(#"{"result":{"Available":123,"Missing":456},"error":null}"#),
-            .json(#"{"result":[101,102],"error":null}"#),
             .json(#"{"result":[201],"error":null}"#),
             .json(#"{"result":[],"error":null}"#)
         ])
@@ -88,10 +209,10 @@ struct AnkiConnectClientTests {
 
         #expect(decks == [
             AnkiDeck(name: "Available", newCount: 0, learningCount: 0, reviewCount: 0),
-            AnkiDeck(name: "Missing", newCount: 2, learningCount: 1, reviewCount: 0, countsAreFromSearch: true)
+            AnkiDeck(name: "Missing", learningCount: 1, reviewCount: 0, countsAreFromSearch: true)
         ])
         let requests = try fixture.requests(count: 9)
-        try expectRequest(requests[6], action: "findCards", params: ["query": "did:456 -is:suspended -is:buried is:new"])
+        try expectRequest(requests[5], action: "getDeckStats", params: ["decks": ["Missing"]])
         try expectRequest(requests[7], action: "findCards", params: ["query": "did:456 -is:suspended -is:buried is:learn is:due"])
         try expectRequest(requests[8], action: "findCards", params: ["query": "did:456 -is:suspended -is:buried is:review -is:learn is:due"])
     }
@@ -106,17 +227,16 @@ struct AnkiConnectClientTests {
             .json("{\"result\":\(names),\"error\":null}"),
             .json(#"{"result":null,"error":"Deck counts unavailable."}"#),
             .json("{\"result\":\(ids),\"error\":null}"),
-            .json(#"{"result":[101],"error":null}"#),
             .json(#"{"result":[201],"error":null}"#),
             .json(#"{"result":[301],"error":null}"#)
         ], key: "test-only-key", port: 9876)
 
         let decks = try await fixture.client.decks()
 
-        #expect(decks == [AnkiDeck(name: name, newCount: 1, learningCount: 1, reviewCount: 1, countsAreFromSearch: true)])
-        let requests = try fixture.requests(count: 9)
+        #expect(decks == [AnkiDeck(name: name, learningCount: 1, reviewCount: 1, countsAreFromSearch: true)])
+        let requests = try fixture.requests(count: 8)
         try expectRequest(requests[5], action: "deckNamesAndIds", key: "test-only-key", port: 9876)
-        for (offset, filter) in ["is:new", "is:learn is:due", "is:review -is:learn is:due"].enumerated() {
+        for (offset, filter) in ["is:learn is:due", "is:review -is:learn is:due"].enumerated() {
             try expectRequest(requests[6 + offset], action: "findCards",
                 params: ["query": "did:1,2,3 -is:suspended -is:buried \(filter)"], key: "test-only-key", port: 9876)
         }
@@ -145,7 +265,7 @@ struct AnkiConnectClientTests {
         _ = try fixture.requests(count: 6)
     }
 
-    @Test(arguments: ["[0]", "[-1]", "[1,1]", "null", "false"], [0, 1, 2])
+    @Test(arguments: ["[0]", "[-1]", "[1,1]", "null", "false"], [0, 1])
     func malformedSearchResultsAreNotCounted(_ result: String, _ completedCounts: Int) async throws {
         let fixture = ClientFixture(searchCountsPrefix(completedCounts: completedCounts)
             + [.json("{\"result\":\(result),\"error\":null}")])
@@ -154,7 +274,7 @@ struct AnkiConnectClientTests {
         _ = try fixture.requests(count: 7 + completedCounts)
     }
 
-    @Test(arguments: ["Invalid API key", "unsupported action", "other failure"], [0, 1, 2])
+    @Test(arguments: ["Invalid API key", "unsupported action", "other failure"], [0, 1])
     func searchErrorsAreNotReportedAsZero(_ message: String, _ completedCounts: Int) async throws {
         let fixture = ClientFixture(searchCountsPrefix(completedCounts: completedCounts)
             + [.json("{\"result\":null,\"error\":\"\(message)\"}")])
@@ -168,7 +288,7 @@ struct AnkiConnectClientTests {
         _ = try fixture.requests(count: 7 + completedCounts)
     }
 
-    @Test(arguments: [0, 1, 2])
+    @Test(arguments: [0, 1])
     func searchPreservesCancellation(_ completedCounts: Int) async throws {
         let fixture = ClientFixture(searchCountsPrefix(completedCounts: completedCounts) + [.failure(.cancelled)])
 
@@ -204,7 +324,10 @@ struct AnkiConnectClientTests {
 
         #expect(session.isConnected)
         #expect(!session.decks.isEmpty)
-        #expect(session.decks.allSatisfy { $0.newCount != nil && $0.learningCount != nil && $0.reviewCount != nil })
+        #expect(session.decks.allSatisfy {
+            ($0.countsAreFromSearch ? $0.newCount == nil : $0.newCount != nil)
+                && $0.learningCount != nil && $0.reviewCount != nil
+        })
         #expect(session.phase == .ready)
         #expect(session.message == nil)
         #expect(session.card == nil)
@@ -497,6 +620,13 @@ private func reflection(omitting action: String? = nil) -> ClientReply {
 
 private func handshakePrefix() -> [ClientReply] {
     [permission(), .json(#"{"result":6,"error":null}"#), reflection()]
+}
+
+private func recoveryPrefix() -> [ClientReply] {
+    handshakePrefix() + [
+        .json(#"{"result":["First","Second"],"error":null}"#),
+        .json(#"{"result":null,"error":"Deck counts unavailable."}"#)
+    ]
 }
 
 private func searchCountsPrefix(completedCounts: Int) -> [ClientReply] {

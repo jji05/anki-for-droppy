@@ -218,7 +218,7 @@ struct AnkiShelfWidget: View {
             deckCount("Due", count: deck.reviewCount)
         }
         .help(deck.countsAreFromSearch
-            ? "New is the eligible new backlog. Learn includes scheduled learning and relearning within Anki's learn-ahead window. Due excludes learning. Daily limits are not applied."
+            ? "New is unavailable. Learn and Due are search counts, not Anki's daily-limited scheduler counts, and may differ from its deck list. Learn includes learning and relearning within the learn-ahead window; Due excludes learning."
             : "Anki's scheduler counts for new, learning and due review cards. Unavailable counts appear as a dash.")
     }
 

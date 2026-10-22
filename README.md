@@ -14,9 +14,11 @@ The connection uses `http://127.0.0.1:8765` by default. If you changed AnkiConne
 
 If your AnkiConnect configuration requires an API key, enter it in settings. The key is kept in memory only and must be re-entered after restarting or re-enabling the droplet. It is not stored in Droppy preferences or logs.
 
-The widget shows separate **New**, **Learn** and **Due** counts. Learn includes learning and relearning cards; Due shows reviews without counting relearning again.
+The widget shows **New**, **Learn** and **Due** from Anki's scheduler, including today's new-card allowance rather than the unseen backlog. Learn includes learning and relearning cards; Due shows reviews without counting relearning again.
 
-If AnkiConnect reports “Deck counts unavailable” or omits a deck's counts, the droplet automatically searches the deck and its subdecks for each category. No add-on changes or extra setup are needed. Search counts exclude suspended and buried cards. New is the entire eligible new backlog, while Learn and Due count scheduled cards, including Anki's learn-ahead window. These fallback counts do not apply daily study limits; hover over the counts for a reminder. Home and filtered deck counts can overlap. When scheduler counts work, Anki's scheduler supplies all three values. Missing counts appear as **—**, never zero.
+If a combined count request fails or omits a deck, the droplet retries the missing decks individually so one unavailable deck does not discard the others' scheduler counts. No add-on changes or extra setup are needed.
+
+For a deck whose scheduler counts remain unavailable, the droplet falls back to searches for scheduled **Learn** and **Due** cards in that deck and its subdecks. All three columns stay visible, with unavailable **New** shown as **—**, never the unseen backlog or an invented zero. Search counts exclude suspended and buried cards and include Anki's learn-ahead window, but do not apply daily study limits and can differ from Anki's deck list; hover over the counts for a reminder. Home and filtered deck counts can overlap. Any missing count appears as **—**.
 
 ## Reviewing
 
