@@ -131,6 +131,7 @@ package protocol AnkiReviewing: Sendable {
     func currentCard() async throws -> AnkiCard?
     func showQuestion(cardID: Int64) async throws -> AnkiCard
     func showAnswer(cardID: Int64) async throws -> AnkiCard
+    func replayAudio(cardID: Int64, showsAnswer: Bool) async throws
     func resetTimer() async throws
     func answer(cardID: Int64, ease: Int) async throws
     func reviews(cardID: Int64) async throws -> [AnkiReview]
@@ -141,7 +142,7 @@ package protocol AnkiReviewing: Sendable {
 package actor AnkiConnectClient: AnkiReviewing {
     package static let requiredActions: Set<String> = [
         "deckNames", "getDeckStats", "guiDeckReview", "guiCurrentCard", "guiShowQuestion",
-        "guiShowAnswer", "guiAnswerCard", "guiStartCardTimer", "getReviewsOfCards", "retrieveMediaFile"
+        "guiShowAnswer", "guiPlayAudio", "guiAnswerCard", "guiStartCardTimer", "getReviewsOfCards", "retrieveMediaFile"
     ]
     package static let maximumMediaBytes = 12 * 1_024 * 1_024
     private static let maximumResponseBytes = 20 * 1_024 * 1_024
@@ -264,6 +265,16 @@ package actor AnkiConnectClient: AnkiReviewing {
         let accepted: Bool = try await request("guiShowAnswer")
         guard accepted else { throw AnkiError.rejected }
         return try await requireCard(cardID)
+    }
+
+    package func replayAudio(cardID: Int64, showsAnswer: Bool) async throws {
+        if showsAnswer {
+            _ = try await showAnswer(cardID: cardID)
+        } else {
+            _ = try await showQuestion(cardID: cardID)
+        }
+        let accepted: Bool = try await request("guiPlayAudio")
+        guard accepted else { throw AnkiError.rejected }
     }
 
     package func resetTimer() async throws {

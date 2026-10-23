@@ -123,7 +123,46 @@ struct CardContentTests {
         #expect(!document.html.contains("secret-answer"))
     }
 
-    @Test(arguments: ["<script>MathJax()</script>", "\\(x^2\\)", "<input id=typeans>", "{{type:Back}}", "[anki:play:q:0]",
+    @Test func replayMarkersUseCardReplayWithoutRawFieldWarnings() {
+        let document = CardDocument(card: card(answer: "[anki:play:a:0][anki:play:a:1]<div>かなり</div>",
+            fields: ["Audio": .init(value: "[sound:word.mp3][sound:sentence.mp3]")]), showsAnswer: true)
+        #expect(document.canReplayAudio)
+        #expect(document.html.contains("<div>かなり</div>"))
+        #expect(!document.html.contains("[anki:play"))
+        #expect(!document.html.contains("word.mp3"))
+        #expect(!document.html.contains("sentence.mp3"))
+        #expect(document.issues.isEmpty)
+    }
+
+    @Test func replayAvailabilityUsesOnlyTheVisibleSide() {
+        let value = card(answer: "[anki:play:q:0][anki:play:a:1]Secret answer",
+                         fields: ["Hidden": .init(value: "[anki:play:a:0]")])
+        #expect(!CardDocument(card: value, showsAnswer: false).canReplayAudio)
+        let answer = CardDocument(card: value, showsAnswer: true)
+        #expect(answer.canReplayAudio)
+        #expect(!answer.html.contains("[anki:play"))
+    }
+
+    @Test(arguments: ["[anki:play:a:-1]", "[anki:play:q:x]", "[anki:play:a:0", "[anki:play:x:0]"])
+    func malformedReplayMarkersRemainUnsupported(_ marker: String) {
+        let document = CardDocument(card: card(question: marker), showsAnswer: false)
+        #expect(!document.canReplayAudio)
+        #expect(document.issues.contains(CardDocument.unsupportedIssue))
+    }
+
+    @Test(arguments: ["<script>[anki:play:q:0]</script>", "<!-- [anki:play:q:0] -->", "<div title='[anki:play:q:0]'>Text</div>"])
+    func replayAvailabilityIgnoresNonContentMarkers(_ html: String) {
+        #expect(!CardDocument(card: card(question: html), showsAnswer: false).canReplayAudio)
+    }
+
+    @Test func replayDoesNotHideOtherUnsupportedContent() {
+        let document = CardDocument(card: card(question: "[anki:play:q:0]<script>bad()</script>[anki:play:a:x]"), showsAnswer: false)
+        #expect(document.canReplayAudio)
+        #expect(document.issues.contains(CardDocument.unsupportedIssue))
+        #expect(!document.html.contains("bad()"))
+    }
+
+    @Test(arguments: ["<script>MathJax()</script>", "\\(x^2\\)", "<input id=typeans>", "{{type:Back}}",
                       "<img src='https://example.com/image.png'>", "<img src='missing.svg'>"])
     func unsupportedContentReportsGenericWarning(_ html: String) {
         let document = CardDocument(card: card(question: html), showsAnswer: false)

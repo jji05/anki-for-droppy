@@ -58,6 +58,140 @@ struct ReviewSessionTests {
         await fake.expectFinished()
     }
 
+    @Test(arguments: [false, true])
+    func replayPreservesTheCardPhaseAndConfirmedCount(_ showsAnswer: Bool) async {
+        let card = sessionCard(20)
+        var steps = answerSteps() + [
+            Step(.reviews(10), .history([])),
+            Step(.answer(10, 3), .ok),
+            Step(.reviews(10), .history([AnkiReview(id: 100, ease: 3)])),
+            Step(.currentCard, .card(card)),
+            Step(.showQuestion(20), .card(card)),
+            Step(.resetTimer, .ok)
+        ]
+        if showsAnswer { steps.append(Step(.showAnswer(20), .card(card))) }
+        steps.append(Step(.replayAudio(20, showsAnswer), .ok))
+        let fake = ScriptedReviewer(steps)
+        let session = activatedSession(fake)
+        await openAnswer(session)
+        session.grade(3)
+        await session.waitUntilIdle()
+        if showsAnswer {
+            session.reveal()
+            await session.waitUntilIdle()
+        }
+        let beforeReplay = await fake.calls
+
+        session.replayAudio()
+        #expect(session.isBusy)
+        await session.waitUntilIdle()
+
+        #expect(session.phase == (showsAnswer ? .answer : .question))
+        #expect(session.card == card)
+        #expect(session.reviewedCount == 1)
+        #expect(session.pendingGrade == nil)
+        #expect(session.isReviewing)
+        #expect(!session.isBusy)
+        #expect(session.message == nil)
+        #expect(await fake.calls == beforeReplay + [.replayAudio(20, showsAnswer)])
+        await fake.expectFinished()
+    }
+
+    @Test(arguments: [AnkiError.changedCard, .rejected, .server, .unavailable])
+    func replayUsesExistingErrorHandlingWithoutGrading(_ error: AnkiError) async {
+        let fake = ScriptedReviewer(questionSteps() + [Step(.replayAudio(10, false), .failure(error))])
+        let session = activatedSession(fake)
+        await openQuestion(session)
+
+        session.replayAudio()
+        await session.waitUntilIdle()
+
+        #expect(session.phase == (error == .unavailable ? .disconnected : .interrupted))
+        #expect(session.card == nil)
+        #expect(session.reviewedCount == 0)
+        #expect(session.pendingGrade == nil)
+        #expect(session.message == error.message)
+        #expect(!session.isBusy)
+        #expect(!session.isReviewing)
+        await fake.expectFinished()
+    }
+
+    @Test func busyReplayBlocksDuplicateReplayAndOtherReviewActions() async {
+        let gate = SessionReplyGate()
+        let fake = ScriptedReviewer(answerSteps() + [Step(.replayAudio(10, true), .ok, gate: gate)])
+        let session = activatedSession(fake)
+        await openAnswer(session)
+        session.replayAudio()
+        #expect(await gate.waitUntilReached())
+        let calls = await fake.calls
+
+        session.replayAudio()
+        session.grade(3)
+        session.refreshReview()
+        session.pause()
+        #expect(session.isBusy)
+        #expect(session.phase == .answer)
+        #expect(session.pendingGrade == nil)
+        #expect(await fake.calls == calls)
+        await gate.release()
+        await session.waitUntilIdle()
+
+        #expect(!session.isBusy)
+        #expect(session.phase == .answer)
+        #expect(session.card == sessionCard())
+        await fake.expectFinished()
+    }
+
+    @Test func replayDoesNothingOutsideAnActiveReview() async {
+        let fake = ScriptedReviewer(questionSteps() + [Step(.currentCard, .card(nil))])
+        let session = activatedSession(fake)
+        session.replayAudio()
+        session.connect()
+        await session.waitUntilIdle()
+        session.replayAudio()
+        session.start()
+        await session.waitUntilIdle()
+        session.pause()
+        session.replayAudio()
+        #expect(session.phase == .paused)
+        #expect(session.card == sessionCard())
+        session.stop()
+        session.replayAudio()
+        session.refreshReview()
+        await session.waitUntilIdle()
+        session.replayAudio()
+        #expect(session.phase == .ended)
+        session.deactivate()
+        session.replayAudio()
+        #expect(!session.isBusy)
+        #expect(session.phase == .disconnected)
+        await fake.expectFinished()
+    }
+
+    @Test(arguments: SessionCancellation.allCases, [false, true])
+    func cancellationSuppressesLateReplaySuccessAndFailure(_ cancellation: SessionCancellation, _ fails: Bool) async {
+        let gate = SessionReplyGate()
+        let fake = ScriptedReviewer(questionSteps() + [
+            Step(.replayAudio(10, false), fails ? .failure(.server) : .ok, gate: gate)
+        ])
+        let session = activatedSession(fake)
+        await openQuestion(session)
+        session.replayAudio()
+
+        await cancelSuspendedOperation(session, gate: gate) {
+            cancellation.apply(to: session)
+        }
+
+        #expect(session.phase == cancellation.phaseWithoutPendingGrade)
+        #expect(session.card == nil)
+        #expect(session.reviewedCount == 0)
+        #expect(session.pendingGrade == nil)
+        #expect(session.message == nil)
+        #expect(!session.isBusy)
+        #expect(!session.isReviewing)
+        await fake.expectFinished()
+    }
+
     @Test func sameCardCanImmediatelyRepeatAfterAConfirmedReview() async {
         let first = sessionCard(10)
         let fake = ScriptedReviewer(answerSteps(first) + [
@@ -121,6 +255,7 @@ struct ReviewSessionTests {
         session.grade(3)
         session.start()
         session.pause()
+        session.replayAudio()
 
         #expect(session.phase == .uncertain)
         #expect(session.reviewedCount == 0)
@@ -281,6 +416,7 @@ struct ReviewSessionTests {
         #expect(session.pendingGrade != nil)
         session.grade(3)
         session.grade(4)
+        session.replayAudio()
         session.refreshReview()
         #expect(await fake.calls.filter { $0 == .answer(10, 3) }.count == 1)
         await gate.release()
@@ -563,7 +699,7 @@ enum HistoryConflict: CaseIterable, Sendable {
 
 private enum SessionCall: Equatable, Sendable {
     case decks, start(String), currentCard, showQuestion(Int64), showAnswer(Int64)
-    case resetTimer, answer(Int64, Int), reviews(Int64), media(String)
+    case resetTimer, replayAudio(Int64, Bool), answer(Int64, Int), reviews(Int64), media(String)
 }
 
 private enum SessionReply: Sendable {
@@ -610,6 +746,12 @@ private actor ScriptedReviewer: AnkiReviewing {
     func showAnswer(cardID: Int64) async throws -> AnkiCard {
         guard let card = try await cardReply(to: .showAnswer(cardID)) else { throw AnkiError.invalidResponse }
         return card
+    }
+
+    func replayAudio(cardID: Int64, showsAnswer: Bool) async throws {
+        guard case .ok = try await respond(to: .replayAudio(cardID, showsAnswer)) else {
+            throw AnkiError.invalidResponse
+        }
     }
 
     func resetTimer() async throws {

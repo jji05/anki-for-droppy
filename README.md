@@ -48,7 +48,9 @@ A small local recovery record (card ID, requested ease, prior review IDs and con
 
 ## Card compatibility
 
-The widget renders Anki's template HTML and CSS, including cloze selection and front-side expansion. Supported collection images, styles, fonts and portable audio references load through AnkiConnect. Scripts, remote resources, arbitrary file access and navigation are blocked; supported audio requires explicit playback.
+The widget renders Anki's template HTML and CSS, including cloze selection and front-side expansion. Supported collection images, styles, fonts and portable audio references load through AnkiConnect. Scripts, remote resources, arbitrary file access and navigation are blocked; portable audio has explicit playback controls.
+
+For Anki replay markers, the speaker button (**Replay audio**) asks Anki to replay the displayed side using Anki's playback settings. It replaces the individual clip buttons; it does not select a particular clip. Anki must remain on the same card. Restoring the displayed side before replay can also trigger Anki's automatic audio.
 
 Interactive templates, typed-answer comparison, MathJax, video, SVG, reviewer-only hooks and some Anki-extracted audio/TTS are not reproduced. Missing or unsupported content shows a warning when detectable; use **Open in Anki** rather than rating an incomplete card. This is a companion, not a full replacement for Anki's renderer.
 
@@ -71,7 +73,7 @@ The harness uses injected fixtures by default, not a real Anki connection. Its s
 /Users/jij/droppykit/Scripts/droppykit run -- --scenario answer --shots .build/shots-answer --report .build/shots-answer/report.json
 ```
 
-Scenarios: `question` (default), `answer`, `ready`, `search-counts`, `counts-zero`, `counts-large`, `counts-unavailable`, `paused`, `offline`, `ended`, `uncertain`, `long`, `image`, `unsupported`. Use the production bundle in Droppy/Playground for live integration checks; harness fixtures do not verify Anki's focus behavior, scheduling or host WebKit support.
+Scenarios: `question` (default), `answer`, `audio-answer`, `ready`, `search-counts`, `counts-zero`, `counts-large`, `counts-unavailable`, `paused`, `offline`, `ended`, `uncertain`, `long`, `image`, `unsupported`. The `audio-answer` fixture checks marker removal and the replay control, not audible playback. Use the production bundle in Droppy/Playground for live integration checks; harness fixtures do not verify Anki's focus behavior, scheduling or host WebKit support.
 
 To test the real connection on the default port without starting a review or grading cards, keep Anki running with AnkiConnect and no API key required, then run:
 

@@ -6,6 +6,7 @@ struct AnkiShelfWidget: View {
     @ObservedObject var session: ReviewSession
     let context: ShelfWidgetContext
     @State private var renderingIssue: String?
+    @State private var canReplayAudio = false
     @State private var confirmChecked = false
 
     var body: some View {
@@ -22,8 +23,14 @@ struct AnkiShelfWidget: View {
         .padding(context.contentInsets)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
-        .onChange(of: session.card?.cardId) { _, _ in renderingIssue = nil }
-        .onChange(of: session.phase) { _, _ in renderingIssue = nil }
+        .onChange(of: session.card?.cardId) { _, _ in
+            renderingIssue = nil
+            canReplayAudio = false
+        }
+        .onChange(of: session.phase) { _, _ in
+            renderingIssue = nil
+            canReplayAudio = false
+        }
         .confirmationDialog("Have you checked this rating in Anki?", isPresented: $confirmChecked) {
             Button("I've checked Anki") { session.acknowledgeCheckedInAnki() }
             Button("Cancel", role: .cancel) {}
@@ -64,11 +71,16 @@ struct AnkiShelfWidget: View {
             Text(card.deckName).lineLimit(1).help(card.deckName)
             Spacer(minLength: 0)
             reviewedLabel
+            if canReplayAudio {
+                iconButton("Replay audio", symbol: "speaker.wave.2.fill") { session.replayAudio() }
+                    .disabled(session.isBusy)
+            }
         }
         .font(.system(size: 11))
         .foregroundStyle(AdaptiveColors.notchSurfaceSecondaryText)
 
-        CardContentView(card: card, showsAnswer: session.phase == .answer, client: session.client) {
+        CardContentView(card: card, showsAnswer: session.phase == .answer, client: session.client,
+                        onReplayAvailability: { canReplayAudio = $0 }) {
             renderingIssue = $0
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

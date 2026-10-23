@@ -13,6 +13,7 @@ package struct CardDocument: Equatable {
     package static let sizeIssue = "This card exceeds the display limits. Open it in Anki."
 
     package let html: String
+    package let canReplayAudio: Bool
     package let issues: Set<String>
     package let scope: String
     package var url: URL { URL(string: "\(Self.scheme)://\(scope)/__document__")! }
@@ -21,6 +22,7 @@ package struct CardDocument: Equatable {
         self.scope = scope
         let selected = showsAnswer ? card.answer : card.question
         var issues: Set<String> = []
+        var canReplayAudio = false
         let fragment: String
         let css: String
         if selected.utf8.count + card.css.utf8.count > Self.maximumDocumentBytes {
@@ -38,12 +40,14 @@ package struct CardDocument: Equatable {
             } else {
                 fragment = rendered
                 css = stylesheet
+                canReplayAudio = sanitizer.canReplayAudio
             }
             issues.formUnion(sanitizer.issues)
         }
-        if card.fields.values.contains(where: { Self.hasExtractedMedia($0.value) }) {
+        if !canReplayAudio, card.fields.values.contains(where: { Self.hasExtractedMedia($0.value) }) {
             issues.insert(Self.unsupportedIssue)
         }
+        self.canReplayAudio = canReplayAudio
         self.issues = issues
         let origin = "\(Self.scheme)://\(scope)"
         let policy = "default-src 'none'; script-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; manifest-src 'none'; img-src \(origin); style-src 'unsafe-inline' \(origin); font-src \(origin); media-src \(origin)"
@@ -109,6 +113,7 @@ package struct CardDocument: Equatable {
 private struct CardHTMLSanitizer {
     let scope: String
     var issues: Set<String> = []
+    var canReplayAudio = false
     private static let tags: Set<String> = [
         "a", "abbr", "b", "bdi", "bdo", "blockquote", "br", "caption", "code", "col", "colgroup",
         "dd", "del", "details", "div", "dl", "dt", "em", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -130,7 +135,7 @@ private struct CardHTMLSanitizer {
     }
 
     mutating func render(_ source: String) -> String {
-        if source.range(of: #"(?i)(mathjax|typeans|\{\{type:|\{\{tts |\[anki:(play|tts)|\\\(|\\\[)"#, options: .regularExpression) != nil {
+        if source.range(of: #"(?i)(mathjax|typeans|\{\{type:|\{\{tts |\[anki:tts|\\\(|\\\[)"#, options: .regularExpression) != nil {
             issues.insert(CardDocument.unsupportedIssue)
         }
         var result = ""
@@ -219,6 +224,12 @@ private struct CardHTMLSanitizer {
     }
 
     private mutating func renderText(_ text: String) -> String {
+        let withoutReplay = text.replacingOccurrences(of: #"\[anki:play:[qa]:[0-9]+\]"#, with: "", options: .regularExpression)
+        if withoutReplay != text { canReplayAudio = true }
+        let text = withoutReplay
+        if text.range(of: "[anki:play", options: .caseInsensitive) != nil {
+            issues.insert(CardDocument.unsupportedIssue)
+        }
         guard let regex = try? NSRegularExpression(pattern: #"\[sound:([^\]\r\n]+)\]"#, options: .caseInsensitive) else { return text }
         let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
         var rendered = ""
@@ -332,6 +343,7 @@ struct CardContentView: NSViewRepresentable {
     let card: AnkiCard
     let showsAnswer: Bool
     let client: any AnkiReviewing
+    var onReplayAvailability: @MainActor (Bool) -> Void = { _ in }
     var onIssue: @MainActor (String) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -339,7 +351,8 @@ struct CardContentView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { NSView() }
 
     func updateNSView(_ view: NSView, context: Context) {
-        context.coordinator.update(in: view, card: card, showsAnswer: showsAnswer, client: client, onIssue: onIssue)
+        context.coordinator.update(in: view, card: card, showsAnswer: showsAnswer, client: client,
+                                   onReplayAvailability: onReplayAvailability, onIssue: onIssue)
     }
 
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) { coordinator.stop() }
@@ -355,6 +368,7 @@ struct CardContentView: NSViewRepresentable {
         private var reported: Set<String> = []
 
         func update(in container: NSView, card: AnkiCard, showsAnswer: Bool, client: any AnkiReviewing,
+                    onReplayAvailability: @escaping @MainActor (Bool) -> Void,
                     onIssue: @escaping @MainActor (String) -> Void) {
             self.onIssue = onIssue
             guard self.card != card || self.showsAnswer != showsAnswer else { return }
@@ -381,6 +395,10 @@ struct CardContentView: NSViewRepresentable {
             container.addSubview(webView)
             self.webView = webView
             webView.load(URLRequest(url: document.url))
+            Task { @MainActor [weak self] in
+                guard self?.documentURL == document.url else { return }
+                onReplayAvailability(document.canReplayAudio)
+            }
             for issue in document.issues { report(issue) }
         }
 
