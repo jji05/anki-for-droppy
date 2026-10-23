@@ -14,6 +14,7 @@
 ### Fixed
 
 - Keep the connection usable when AnkiConnect reports unavailable scheduler deck counts. Show missing counts as unavailable, not zero.
+- Replace raw Anki replay markers with a Replay audio button that asks Anki to play the displayed card side using its playback settings. Replay requires Anki to remain on the same card; restoring the side can also trigger automatic audio.
 
 ### Compatibility
 
